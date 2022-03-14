@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  sam-dynamodb-fargate-tasks
+
+  Sample SAM Template for sam-dynamodb-fargate-tasks
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+
+Parameters:
+  SubnetId01:
+    Type: String
+    Description: Subnet Id 01 for containers
+  SubnetId02:
+    Type: String
+    Description: Subnet Id 02 for containers
+  SecurityGroupId:
+    Type: String
+    Description: Security Group Id for containers
+
+Resources:
+
+  Jobs:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: "job_id"
+        AttributeType: "S"
+      KeySchema:
+      - AttributeName: "job_id"
+        KeyType: "HASH"
+      BillingMode: "PAY_PER_REQUEST"
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+
+
+  ManageFargateTaskFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: functions/manage-fargate
+      Handler: create-remove-task/app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64
+      Environment:
+        Variables:
+          TABLE_JOBS: !Ref Jobs
+          CLUSTER_NAME: !Sub '${AWS::StackName}-cluster'
+          TASK_ROLE_ARN: !GetAtt TaskRole.Arn
+          TASK_DEFINITION: !Ref LoadBlackListTaskDefinition
+          SUBNET_ID_01: !Ref SubnetId01
+          SUBNET_ID_02: !Ref SubnetId02
+          SECURITY_GROUP_ID: !Ref SecurityGroupId
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Jobs
+        - Version: '2012-10-17' 
+          Statement:
+            - Effect: Allow
+              Action:
+                - ecs:RunTask
+                - ecs:StopTask
+                - iam:PassRole
+              Resource: '*'
+      Events:
+        Stream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt Jobs.StreamArn
+            BatchSize: 100
+            StartingPosition: TRIM_HORIZON
+            
+        
+  # CLOUDWATCH LOG GROUP FOR TASK CONTAINERS
+
+  CloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref AWS::StackName
+      RetentionInDays: 365
+
+  # CLUSTER FOR CONTAINERS
+
+  ECSCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: !Sub '${AWS::StackName}-cluster'
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+          
+  TaskExecutionRole:
+      Type: 'AWS::IAM::Role'
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - ecs-tasks.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Path: /
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+      Type: 'AWS::IAM::Role'
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - ecs-tasks.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Path: /
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # ECR REPOSITORY
+            
+  MyRepository: 
+    Type: AWS::ECR::Repository
+    Properties: 
+      RepositoryName: !Sub '${AWS::StackName}-repository'
+      ImageScanningConfiguration: 
+        ScanOnPush: "true"
+
+  # ECR TASK DEFINITION
+
+  LoadBlackListTaskDefinition: 
+    Type: AWS::ECS::TaskDefinition
+    Properties: 
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      NetworkMode: 'awsvpc'
+      Cpu: 4096
+      Memory: 16384
+      RequiresCompatibilities:
+        - "FARGATE"
+      ContainerDefinitions: 
+        - 
+          Name: "container"
+          Image: !GetAtt MyRepository.RepositoryUri
+          Cpu: 4096
+          Memory: 16384
+          Essential: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CloudWatchLogsGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: 'fargate_task'
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  ManageFargateTaskFunction:
+    Description: "Manage Fargate Task Lambda Function ARN"
+    Value: !GetAtt ManageFargateTaskFunction.Arn
