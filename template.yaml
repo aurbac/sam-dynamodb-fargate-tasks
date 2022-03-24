@@ -35,8 +35,7 @@ Resources:
       BillingMode: "PAY_PER_REQUEST"
       StreamSpecification:
         StreamViewType: NEW_IMAGE
-
-
+        
   ManageFargateTaskFunction:
     Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
     Properties:
@@ -91,6 +90,9 @@ Resources:
       CapacityProviders:
         - FARGATE
         - FARGATE_SPOT
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
       DefaultCapacityProviderStrategy:
         - CapacityProvider: FARGATE
           Weight: 1
@@ -128,6 +130,20 @@ Resources:
         Path: /
         ManagedPolicyArns:
           - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        Policies: 
+          - PolicyName: BasicMonitoring
+            PolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:PutLogEvents
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:DescribeLogStreams
+                    - logs:DescribeLogGroups
+                    - cloudwatch:PutMetricData
+                  Resource: '*'
 
   # ECR REPOSITORY
             
@@ -146,16 +162,16 @@ Resources:
       TaskRoleArn: !GetAtt TaskRole.Arn
       ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
       NetworkMode: 'awsvpc'
-      Cpu: 4096
-      Memory: 16384
+      Cpu: 256
+      Memory: 1024
       RequiresCompatibilities:
         - "FARGATE"
       ContainerDefinitions: 
         - 
           Name: "container"
           Image: !GetAtt MyRepository.RepositoryUri
-          Cpu: 4096
-          Memory: 16384
+          Cpu: 256
+          Memory: 1024
           Essential: true
           LogConfiguration:
             LogDriver: awslogs
@@ -163,6 +179,9 @@ Resources:
               awslogs-group: !Ref CloudWatchLogsGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: 'fargate_task'
+
+  MySNSTopic:
+    Type: AWS::SNS::Topic
 
 Outputs:
   # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
